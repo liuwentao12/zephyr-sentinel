@@ -3,11 +3,11 @@
 
 #include "audio.h"
 
+#define AUDIO_BUFFER_SIZE 512
+static int16_t audio_buffer[AUDIO_BUFFER_SIZE / sizeof(int16_t)];
 
 int main(void)
 {
-    struct audio_sample sample = {0};
-
     if (audio_init() != 0) {
         printk("Audio init failed\n");
         return 0;
@@ -23,22 +23,23 @@ int main(void)
     int64_t last_print = 0;
     while (1)
     {
-        int ret = audio_read(&sample);
+        size_t size;
+        int ret = audio_read(audio_buffer, sizeof(audio_buffer), &size);
 
         if (ret != 0) {
             printk("Audio read failed: %d\n", ret);
             break;
         }
 
-        size_t count = sample.size / sizeof(int16_t);
+        size_t count = size / sizeof(int16_t);
 
-        int16_t min = sample.data[1];
-        int16_t max = sample.data[1];
+        int16_t min = audio_buffer[1];
+        int16_t max = audio_buffer[1];
 
         /* 只看右声道：1, 3, 5, 7... */
         for (size_t i = 1; i < count; i += 2)
         {
-            int16_t value = sample.data[i];
+            int16_t value = audio_buffer[i];
 
             if (value < min)
                 min = value;

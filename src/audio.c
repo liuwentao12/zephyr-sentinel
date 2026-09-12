@@ -19,14 +19,6 @@ static const struct device *i2s_dev;
  */
 K_MEM_SLAB_DEFINE_STATIC(rx_mem_slab, AUDIO_BLOCK_SIZE, AUDIO_BLOCK_COUNT, 4);
 
-/*
- * 应用层自己的缓冲区。
- * i2s_read() 会把 RX block 拷贝到这里，
- * 并自动释放内部 RX block。
- */
-static int16_t audio_buffer[AUDIO_BLOCK_SIZE / sizeof(int16_t)];
-
-
 static struct i2s_config i2s_cfg =
 {
     .word_size = 16,
@@ -141,27 +133,24 @@ int audio_start(void)
 }
 
 
-int audio_read(struct audio_sample *sample)
+int audio_read(int16_t *buffer, size_t buffer_size, size_t *read_size)
 {
     void *mem_block;
     size_t size;
-    int ret;
 
-    ret = i2s_read(i2s_dev, &mem_block, &size);
-    if (ret != 0) {
+    int ret = i2s_read(i2s_dev, &mem_block, &size);
+    if (ret != 0)
+    {
         return ret;
     }
-
-    if (size > sizeof(audio_buffer)) {
+    if (size > buffer_size)
+    {
         k_mem_slab_free(&rx_mem_slab, mem_block);
         return -EOVERFLOW;
     }
-
-    memcpy(audio_buffer, mem_block, size);
+    memcpy(buffer, mem_block, size);
     k_mem_slab_free(&rx_mem_slab, mem_block);
-
-    sample->data = audio_buffer;
-    sample->size = size;
+    *read_size = size;
 
     return 0;
 }

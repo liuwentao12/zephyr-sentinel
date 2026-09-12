@@ -4,12 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct audio_sample
-{
-    int16_t *data;
-    size_t size;
-};
-
 /**
  * @brief 初始化音频模块
  */
@@ -23,7 +17,7 @@ int audio_start(void);
 /**
  * @brief 获取音频数据
  */
-int audio_read(struct audio_sample *sample);
+int audio_read(int16_t *buffer, size_t buffer_size, size_t *read_size);
 
 
 #endif
