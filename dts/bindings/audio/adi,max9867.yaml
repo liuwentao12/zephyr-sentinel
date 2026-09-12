@@ -1,0 +1,5 @@
+description: MAX9867 audio codec
+
+compatible: "adi,max9867"
+
+include: i2c-device.yaml
