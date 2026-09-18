@@ -1,11 +1,13 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/drivers/uart.h>
 
 #include "audio.h"
 
 //应用层内存池
 #define APP_AUDIO_BLOCK_SIZE  512
 #define APP_AUDIO_BLOCK_COUNT 4
+#define AUDIO_GAIN 8
 
 //准备两个线程的栈
 #define CAPTURE_STACK_SIZE 1024
@@ -19,6 +21,8 @@ K_THREAD_STACK_DEFINE(process_stack, PROCESS_STACK_SIZE);
 
 static struct k_thread capture_thread;
 static struct k_thread process_thread;
+
+static const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
 K_MEM_SLAB_DEFINE_STATIC(app_audio_slab, APP_AUDIO_BLOCK_SIZE, APP_AUDIO_BLOCK_COUNT,4);
 
@@ -54,44 +58,42 @@ static void audio_capture_task(void *p1, void *p2, void *p3)
         {
             k_mem_slab_free(&app_audio_slab, buffer);
         }
-        
     }
-    
 }
 
 static void audio_process_task(void *p1, void *p2, void *p3)
 {
-    int64_t last_print = 0;
     while (1)
     {
         struct audio_block block;
-        k_msgq_get(&audio_msgq, &block, K_FOREVER);
-        int16_t *samples = (int16_t *)block.buffer;
-        size_t count = block.size / sizeof(int16_t);
 
-        int16_t min = samples[1];
-        int16_t max = samples[1];
-        for (size_t i = 1; i < count; i += 2)
+        k_msgq_get(&audio_msgq, &block, K_FOREVER);
+
+        uint32_t *slots = (uint32_t *)block.buffer;
+        size_t count = block.size / sizeof(uint32_t);
+
+        /* MAX9867 places its 16-bit sample at the MSB end of each 32-bit slot. */
+        for (size_t i = 0; i < count; i++)
         {
-            int16_t value = samples[i];
-            if (value < min)
+            int32_t amplified = (int32_t)(int16_t)(slots[i] >> 16) * AUDIO_GAIN;
+
+            if (amplified > INT16_MAX)
             {
-                min = value;
+                amplified = INT16_MAX;
             }
-            if (value > max)
+            else if (amplified < INT16_MIN)
             {
-                max = value;
+                amplified = INT16_MIN;
             }
+
+            uint16_t sample = (uint16_t)(int16_t)amplified;
+
+            /* WAV PCM is little-endian, independent of the MCU memory layout. */
+            uart_poll_out(uart_dev, sample & 0xff);
+            uart_poll_out(uart_dev, sample >> 8);
         }
 
-            int volume = (int)max - (int)min;
-
-            if (k_uptime_get() - last_print >= 500)
-            {
-                printk("volume: %d\n",volume);
-                last_print = k_uptime_get();
-            }
-            k_mem_slab_free(&app_audio_slab, block.buffer);
+        k_mem_slab_free(&app_audio_slab, block.buffer);
     }
 }
 

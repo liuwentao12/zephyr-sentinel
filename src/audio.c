@@ -6,8 +6,6 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/sys/printk.h>
 
-
-
 #define AUDIO_BLOCK_SIZE 512
 #define AUDIO_BLOCK_COUNT  4
 
@@ -21,8 +19,9 @@ K_MEM_SLAB_DEFINE_STATIC(rx_mem_slab, AUDIO_BLOCK_SIZE, AUDIO_BLOCK_COUNT, 4);
 
 static struct i2s_config i2s_cfg =
 {
-    .word_size = 16,
-    .channels = 2,
+    /* 64 BCLK per frame: one 32-bit time slot for each I2S channel. */
+    .word_size = 32,
+    .channels = 1,
     .format = I2S_FMT_DATA_FORMAT_I2S,
     /* MAX9867 提供 BCLK/LRCLK，MCU 接收外部时钟。 */
     .options =I2S_OPT_FRAME_CLK_TARGET | I2S_OPT_BIT_CLK_TARGET,
@@ -51,14 +50,14 @@ static int codec_configure(const struct i2c_dt_spec *codec)
         {0x05, 0x10}, /* MCLK 不分频：PCLK = 12.288 MHz */
         {0x06, 0x20}, /* NI = 0x2000：采样率 16 kHz */
         {0x07, 0x00},
-        {0x09, 0x02},  /* BCLK = 48 × LRCLK = 768 kHz */
+        {0x09, 0x01},  /* BCLK = 64 × LRCLK = 1.024 MHz */
         {0x08, 0x98}, /* codec 主模式，I2S 格式 */
         {0x0A, 0xA2}, /* 沿用 Zephyr 示例的滤波配置 */
-        {0x15, 0x10}, /* 沿用板载数字麦克风输入配置 */
+        {0x15, 0x10}, /* 选择板载右数字麦克风，与 MAX32 单声道右槽匹配 */
         {0x0D, 0x33}, /* ADC 数字增益 0 dB */
         {0x0E, 0x4C}, /* 静音 line-in 到播放输出的通路 */
         {0x0F, 0x4C},
-        {0x17, 0x83}, /* 退出关断，启用左右 ADC，DAC 保持关闭 */
+        {0x17, 0x82}, /* 退出关断，启用左ADC，DAC 保持关闭 */
     };
     for(size_t i =0; i < sizeof(config)/sizeof(config[0]); i++)
     {
@@ -133,7 +132,7 @@ int audio_start(void)
 }
 
 
-int audio_read(int16_t *buffer, size_t buffer_size, size_t *read_size)
+int audio_read(void *buffer, size_t buffer_size, size_t *read_size)
 {
     void *mem_block;
     size_t size;
