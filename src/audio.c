@@ -36,6 +36,10 @@ static int codec_configure(const struct i2c_dt_spec *codec)
     int ret;
     /*配置期间关闭音频功能*/
     ret = i2c_reg_write_byte_dt(codec,0x17,0x00);
+    if (ret != 0)
+    {
+        return ret;
+    }
     /*MCU复位不一定复位codec,先清除上次配置*/
     for (uint8_t reg = 0x04;reg <= 0x16;reg++)
     {
