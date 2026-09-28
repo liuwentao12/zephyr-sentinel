@@ -15,6 +15,11 @@ int audio_init(void);
 int audio_start(void);
 
 /**
+ * @brief 停止采集音频，清理未交付的数据
+ */
+int audio_stop(void);
+
+/**
  * @brief 获取音频数据
  */
 int audio_read(void *buffer, size_t buffer_size, size_t *read_size);

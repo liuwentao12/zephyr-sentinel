@@ -40,8 +40,53 @@ struct audio_block
     void *buffer;
     size_t size;
 };
-//消息队列
+
+enum control_cmd
+{
+    CMD_TOGGLE_RECORDING,
+};
+
+K_MSGQ_DEFINE(control_msgq, sizeof(enum control_cmd), 4, 4);
 K_MSGQ_DEFINE(audio_msgq, sizeof(struct audio_block), APP_AUDIO_BLOCK_COUNT, 4);
+
+K_SEM_DEFINE(audio_drained, 0, 1);
+
+static struct gpio_callback button_cb;
+static struct k_work_delayable button_debounce_work;
+
+static void button_debounce_handler(struct k_work *work)
+{
+    static int last_pressed = 0;
+    /*返回逻辑状态：1表示按下，0表示松开*/
+    int pressed = gpio_pin_get_dt(&button);
+    if (pressed < 0)
+    {
+        printk("Button read failed : %d\n",pressed);
+        return;
+    }
+    /*状态没有变化，不产生新事件*/
+    if (pressed == last_pressed)
+    {
+        return;
+    }
+    last_pressed = pressed;
+    /*松开只更新状态，按下才发送指令*/
+    if (pressed == 0)
+    {
+        return;
+    }
+    enum control_cmd cmd = CMD_TOGGLE_RECORDING;
+    int ret = k_msgq_put(&control_msgq, &cmd, K_NO_WAIT);
+    if (ret != 0)
+    {
+        printk("Control queue full: %d\n",ret);
+    }
+}
+
+static void button_irq_handler(const struct device *port, struct gpio_callback *cb, uint32_t pins)
+{
+    k_work_reschedule(&button_debounce_work,K_MSEC(30));
+}
 
 static int controls_init(void)
 {
@@ -54,35 +99,129 @@ static int controls_init(void)
     {
         return ret;
     }
-    return gpio_pin_configure_dt(&record_led, GPIO_OUTPUT_INACTIVE);
+    ret = gpio_pin_configure_dt(&record_led, GPIO_OUTPUT_INACTIVE);
+    if (ret != 0)
+    {
+        return ret;
+    }
+    /*先准备好消抖工作和回调，再开启中断*/
+    k_work_init_delayable(&button_debounce_work, button_debounce_handler);
+    gpio_init_callback(&button_cb, button_irq_handler, BIT(button.pin));
+
+    ret = gpio_add_callback(button.port, &button_cb);
+    if (ret != 0)
+    {
+        return ret;
+    }
+    return gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_BOTH);
 }
 
 static void audio_capture_task(void *p1, void *p2, void *p3)
 {
     while (1)
     {
-        void *buffer;
-        int ret = k_mem_slab_alloc(&app_audio_slab, &buffer, K_FOREVER);
-        size_t size;
-        ret = audio_read(buffer, APP_AUDIO_BLOCK_SIZE, &size);
-        if (ret != 0)
+        /* 待机：没有指令时阻塞，不读取音频。 */
+        enum control_cmd cmd;
+        
+        int ret = k_msgq_get(&control_msgq, &cmd, K_FOREVER);
+        if (ret != 0 || cmd != CMD_TOGGLE_RECORDING)
         {
-            k_mem_slab_free(&app_audio_slab, buffer);
             continue;
         }
-        struct audio_block block =
-        {
-            .buffer = buffer,
-            .size = size,
-        };
-        ret = k_msgq_put(&audio_msgq, &block, K_NO_WAIT);
+        
+        ret = audio_start();
         if (ret != 0)
         {
-            k_mem_slab_free(&app_audio_slab, buffer);
+            continue;
         }
+        
+        ret = gpio_pin_set_dt(&record_led, 1);
+        if (ret != 0)
+        {
+            printk("LED on failed: %d\n",ret);
+        }
+        
+        printk("Audio started\n");
+
+        //统计成功读取的音频块数量
+        uint32_t blocks = 0;
+        int read_error = 0;
+        /*录音：检查停止指令，并持续采集*/
+        while (1)
+        {
+            ret = k_msgq_get(&control_msgq, &cmd, K_NO_WAIT);
+            if (ret == 0 && cmd == CMD_TOGGLE_RECORDING)
+            {
+                break;
+            }
+            
+            void *buffer;
+            /*有限等待，避免一直等内存而无法检查停止指令*/
+            ret = k_mem_slab_alloc(&app_audio_slab, &buffer, K_MSEC(20));
+            if (ret != 0)
+            {
+                continue;
+            }
+            
+            size_t size;
+            ret = audio_read(buffer, APP_AUDIO_BLOCK_SIZE, &size);
+            if (ret != 0)
+            {
+                k_mem_slab_free(&app_audio_slab, buffer);
+                read_error = ret;
+                break;
+            }
+            
+            struct audio_block block =
+            {
+                .buffer = buffer,
+                .size = size,
+            };
+
+            ret = k_msgq_put(&audio_msgq, &block, K_NO_WAIT);
+            if (ret != 0)
+            {
+                k_mem_slab_free(&app_audio_slab, buffer);
+            }
+            
+            blocks++;
+        }
+        /*停止产生新的音频块*/
+        ret = audio_stop();
+        if (ret != 0)
+        {
+            printk("Audio stop failed: %d;reset required\n",ret);
+            return;
+        }
+        /*结束标记排在已有音频块后*/
+        struct audio_block end_marker =
+        {
+            .buffer = NULL,
+            .size = 0,
+        };
+        ret = k_msgq_put(&audio_msgq, &end_marker, K_FOREVER);
+        if (ret != 0)
+        {
+            printk("Audio end marker failed: %d; reset required\n",ret);
+            return;
+        }
+        
+        k_sem_take(&audio_drained, K_FOREVER);
+
+        ret = gpio_pin_set_dt(&record_led, 0);
+        if (ret != 0)
+        {
+            printk("LED off failed: %d\n",ret);
+        }
+        if (read_error != 0)
+        {
+            printk("Audio read failed:%d\n",read_error);
+        }
+        
+        printk("Audio stopped, captured blocks: %u\n",(unsigned int)blocks);
     }
 }
-//把采集到的 I2S 原始数据，转换成电脑可以接收的 16 位 PCM 音频，再通过串口发出去。
+//消费音频块、处理结束标记，并按需输出串口调试音频
 static void audio_process_task(void *p1, void *p2, void *p3)
 {
     while (1)
@@ -91,6 +230,12 @@ static void audio_process_task(void *p1, void *p2, void *p3)
 
         k_msgq_get(&audio_msgq, &block, K_FOREVER);
 
+        /*空指针作为结束标记，不代表真实的音频内存块*/
+        if(block.buffer == NULL)
+        {
+            k_sem_give(&audio_drained);
+            continue;
+        }
         #if AUDIO_UART_DEBUG
         uint32_t *slots = (uint32_t *)block.buffer;
         size_t count = block.size / sizeof(uint32_t);
@@ -135,13 +280,7 @@ int main(void)
         return 0;
     }
 
-    if (audio_start() != 0) 
-    {
-        printk("Audio start failed\n");
-        return 0;
-    }
-
-    printk("Audio started\n");
+    printk("Ready: press SW2 to record\n");
 
     k_thread_create(&process_thread, process_stack, K_THREAD_STACK_SIZEOF(process_stack), audio_process_task, NULL, NULL, NULL, PROCESS_PRIORITY, 0, K_NO_WAIT);
     k_thread_create(&capture_thread, capture_stack, K_THREAD_STACK_SIZEOF(capture_stack), audio_capture_task, NULL, NULL, NULL, CAPTURE_PRIORITY, 0, K_NO_WAIT);

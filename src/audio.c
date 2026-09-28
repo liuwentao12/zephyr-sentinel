@@ -135,6 +135,20 @@ int audio_start(void)
     return 0;
 }
 
+int audio_stop(void)
+{
+    int ret = i2s_trigger(i2s_dev, I2S_DIR_RX, I2S_TRIGGER_DROP);
+    /*
+     * 当前 MAX32 驱动进入 ERROR 后，DROP 会失败。
+     * 此时尝试 PREPARE，清理并恢复到 READY。
+     */
+    if (ret == -EIO)
+    {
+        ret = i2s_trigger(i2s_dev, I2S_DIR_RX, I2S_TRIGGER_PREPARE);
+    }
+    return ret;
+}
+
 
 int audio_read(void *buffer, size_t buffer_size, size_t *read_size)
 {
