@@ -8,4 +8,5 @@ target_sources(app PRIVATE
     src/main.c
     src/audio.c
     src/controls.c
+    src/display.c
 )

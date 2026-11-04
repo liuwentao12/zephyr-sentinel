@@ -4,6 +4,7 @@
 
 #include "audio.h"
 #include "controls.h"
+#include "display.h"
 
 /* 0：关闭串口音频输出；1：开启串口音频输出 */
 #define AUDIO_UART_DEBUG 0
@@ -216,6 +217,10 @@ static void audio_process_task(void *p1, void *p2, void *p3)
 
 int main(void)
 {
+    int display_ret = oled_init();
+
+    if (display_ret != 0) printk("OLED init failed: %d\n", display_ret);
+    
     int ret = controls_init(record_button_pressed);
     if (ret != 0)
     {
