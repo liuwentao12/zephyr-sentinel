@@ -217,11 +217,17 @@ static void audio_process_task(void *p1, void *p2, void *p3)
 
 int main(void)
 {
-    int display_ret = oled_init();
+    int ret = oled_init();
 
-    if (display_ret != 0) printk("OLED init failed: %d\n", display_ret);
-    
-    int ret = controls_init(record_button_pressed);
+    if (ret == 0) {
+        ret = oled_show_text("FUCK", "AUDIO READY");
+    }
+
+    if (ret != 0) {
+        printk("OLED error: %d\n", ret);
+    }
+
+    ret = controls_init(record_button_pressed);
     if (ret != 0)
     {
         printk("Button/LED init failed: %d\n", ret);
