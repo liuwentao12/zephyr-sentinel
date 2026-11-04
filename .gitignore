@@ -3,3 +3,5 @@ external
 **/build*/
 .vscode/
 *.wav
+.cache/
+.clangd/
