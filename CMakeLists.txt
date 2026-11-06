@@ -9,4 +9,5 @@ target_sources(app PRIVATE
     src/audio.c
     src/controls.c
     src/display.c
+    src/font5x8.c
 )
