@@ -10,7 +10,7 @@
 };
 
 &uart0 {
-    current-speed = <921600>;
+    current-speed = <115200>;
 };
 
 / {
@@ -21,7 +21,8 @@
 
 &i2c2 {
     status = "okay";
-
+    clock-frequency = <I2C_BITRATE_FAST>;
+    
     oled: ssd1306@3c {
         compatible = "solomon,ssd1306";
         reg = <0x3c>;
